@@ -46,11 +46,11 @@ kill_app() {
 
 # Function to start the app
 start_app() {
-    cd "$REPO_DIR"
     log "Starting application with: $START_COMMAND"
+    log "Working directory: $REPO_DIR"
 
-    # Start the app in background
-    bash -c "$START_COMMAND" &
+    # Start the app in background with explicit directory
+    bash -c "cd '$REPO_DIR' && $START_COMMAND" &
     APP_PID=$!
 
     log "Application started with PID: $APP_PID"
@@ -60,13 +60,31 @@ start_app() {
 install_deps() {
     cd "$REPO_DIR"
     if [ -f "package.json" ]; then
-        log "Installing dependencies with: $INSTALL_COMMAND"
-        if eval "$INSTALL_COMMAND"; then
-            log "Dependencies installed successfully"
+        # Use npm ci if package-lock.json exists, otherwise use the configured command
+        if [ -f "package-lock.json" ] && [ "$INSTALL_COMMAND" = "npm install" ]; then
+            log "Found package-lock.json, using: npm ci"
+            if npm ci; then
+                log "Dependencies installed successfully with npm ci"
+            else
+                error "Failed to install dependencies with npm ci!"
+                return 1
+            fi
         else
-            error "Failed to install dependencies!"
+            log "Installing dependencies with: $INSTALL_COMMAND"
+            if eval "$INSTALL_COMMAND"; then
+                log "Dependencies installed successfully"
+            else
+                error "Failed to install dependencies!"
+                return 1
+            fi
+        fi
+
+        # Verify node_modules exists
+        if [ ! -d "node_modules" ]; then
+            error "node_modules directory not created after installation!"
             return 1
         fi
+        log "node_modules directory verified"
     else
         warn "No package.json found, skipping dependency installation"
     fi
