@@ -1,5 +1,4 @@
 #!/bin/bash
-set -e
 
 # Colors for output
 RED='\033[0;31m'
@@ -62,10 +61,16 @@ install_deps() {
     cd "$REPO_DIR"
     if [ -f "package.json" ]; then
         log "Installing dependencies with: $INSTALL_COMMAND"
-        eval "$INSTALL_COMMAND"
+        if eval "$INSTALL_COMMAND"; then
+            log "Dependencies installed successfully"
+        else
+            error "Failed to install dependencies!"
+            return 1
+        fi
     else
         warn "No package.json found, skipping dependency installation"
     fi
+    return 0
 }
 
 # Trap signals to ensure cleanup
@@ -88,7 +93,10 @@ LAST_COMMIT=$(git rev-parse HEAD)
 log "Current commit: $LAST_COMMIT"
 
 # Install dependencies and start app
-install_deps
+if ! install_deps; then
+    error "Cannot start application - dependency installation failed"
+    exit 1
+fi
 start_app
 
 # Monitor loop
@@ -127,7 +135,10 @@ while true; do
         LAST_COMMIT=$REMOTE_COMMIT
 
         # Reinstall dependencies
-        install_deps
+        if ! install_deps; then
+            error "Failed to install dependencies after update, will retry next cycle"
+            continue
+        fi
 
         # Restart app
         start_app
