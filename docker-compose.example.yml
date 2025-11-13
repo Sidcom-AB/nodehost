@@ -1,0 +1,69 @@
+version: '3.8'
+
+services:
+  # Example 1: Basic Node.js app
+  my-node-app:
+    image: ghcr.io/sidcom-ab/nodehost:latest
+    container_name: my-node-app
+    restart: unless-stopped
+    environment:
+      # Required: The Git repository URL to clone and run
+      REPO_URL: https://github.com/yourusername/your-node-app.git
+
+      # Optional: Git branch to track (default: main)
+      BRANCH: main
+
+      # Optional: How often to check for updates in seconds (default: 60)
+      CHECK_INTERVAL: 60
+
+      # Optional: Command to start your app (default: npm start)
+      START_COMMAND: npm start
+
+      # Optional: Command to install dependencies (default: npm install)
+      INSTALL_COMMAND: npm install
+
+      # Optional: Node environment
+      NODE_ENV: production
+    ports:
+      # Map container port to host port (adjust as needed)
+      - "3000:3000"
+    volumes:
+      # Optional: Persist node_modules and repo between container restarts
+      - node-app-data:/app/repo
+
+  # Example 2: App with custom start command and different port
+  my-express-api:
+    image: ghcr.io/sidcom-ab/nodehost:latest
+    container_name: my-express-api
+    restart: unless-stopped
+    environment:
+      REPO_URL: https://github.com/yourusername/express-api.git
+      BRANCH: production
+      CHECK_INTERVAL: 120
+      START_COMMAND: node server.js
+      INSTALL_COMMAND: npm ci --production
+    ports:
+      - "8080:8080"
+    volumes:
+      - express-api-data:/app/repo
+
+  # Example 3: Development app with shorter check interval
+  my-dev-app:
+    image: ghcr.io/sidcom-ab/nodehost:latest
+    container_name: my-dev-app
+    restart: unless-stopped
+    environment:
+      REPO_URL: https://github.com/yourusername/dev-app.git
+      BRANCH: develop
+      CHECK_INTERVAL: 30
+      START_COMMAND: npm run dev
+      NODE_ENV: development
+    ports:
+      - "3001:3000"
+    volumes:
+      - dev-app-data:/app/repo
+
+volumes:
+  node-app-data:
+  express-api-data:
+  dev-app-data:
