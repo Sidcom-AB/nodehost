@@ -24,6 +24,12 @@ services:
 
       # Optional: Node environment
       NODE_ENV: production
+
+      # Add any custom environment variables your app needs
+      # These will be passed through to your Node.js application
+      # OPENAI_API_KEY: your-api-key-here
+      # DATABASE_URL: postgresql://localhost/mydb
+      # API_SECRET: your-secret-here
     ports:
       # Map container port to host port (adjust as needed)
       - "3000:3000"
@@ -47,7 +53,27 @@ services:
     volumes:
       - express-api-data:/app/repo
 
-  # Example 3: Development app with shorter check interval
+  # Example 3: App with API keys and secrets
+  my-api-app:
+    image: ghcr.io/sidcom-ab/nodehost:latest
+    container_name: my-api-app
+    restart: unless-stopped
+    environment:
+      REPO_URL: https://github.com/yourusername/api-app.git
+      BRANCH: main
+      CHECK_INTERVAL: 60
+      START_COMMAND: npm start
+      # App-specific environment variables
+      OPENAI_API_KEY: sk-your-openai-key-here
+      DATABASE_URL: postgresql://user:pass@db:5432/mydb
+      JWT_SECRET: your-jwt-secret-here
+      API_PORT: 3000
+    ports:
+      - "3001:3000"
+    volumes:
+      - api-app-data:/app/repo
+
+  # Example 4: Development app with shorter check interval
   my-dev-app:
     image: ghcr.io/sidcom-ab/nodehost:latest
     container_name: my-dev-app
@@ -59,11 +85,12 @@ services:
       START_COMMAND: npm run dev
       NODE_ENV: development
     ports:
-      - "3001:3000"
+      - "3002:3000"
     volumes:
       - dev-app-data:/app/repo
 
 volumes:
   node-app-data:
   express-api-data:
+  api-app-data:
   dev-app-data:

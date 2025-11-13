@@ -49,8 +49,17 @@ start_app() {
     log "Starting application with: $START_COMMAND"
     log "Working directory: $REPO_DIR"
 
-    # Start the app in background with explicit directory
-    bash -c "cd '$REPO_DIR' && $START_COMMAND" &
+    # List all custom environment variables (exclude default system vars)
+    log "Environment variables being passed to app:"
+    env | grep -v -E '^(PATH|HOME|HOSTNAME|PWD|SHLVL|_|OLDPWD|TERM|REPO_URL|BRANCH|CHECK_INTERVAL|START_COMMAND|INSTALL_COMMAND)=' | while read line; do
+        # Mask sensitive values in logs
+        key=$(echo "$line" | cut -d'=' -f1)
+        log "  $key=***"
+    done
+
+    # Start the app in background with explicit directory and all environment variables
+    cd "$REPO_DIR"
+    eval "$START_COMMAND" &
     APP_PID=$!
 
     log "Application started with PID: $APP_PID"
