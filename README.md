@@ -6,10 +6,15 @@ A generic Docker image that can host and auto-update any Node.js application fro
 
 - 🚀 Host any Node.js app from a Git repository
 - 🔄 Automatic updates when new commits are pushed
+- ⚡ **Zero-downtime deployments** with atomic releases
+- 🛡️ **Automatic rollback** if deployment fails
 - ⚙️ Configurable via environment variables
 - 🐳 Easy deployment with Docker Compose
 - 📦 Uses latest Node.js LTS (Node 22)
 - 🔒 Lightweight Alpine Linux base
+- 🔧 **Smart dependency management** (auto-fallback from npm ci to npm install)
+- 🧹 **Automatic cleanup** of old releases (keeps last 3)
+- 💪 **Graceful shutdown** with proper port release
 
 ## Quick Start
 
@@ -77,14 +82,35 @@ docker run -d \
 
 ## How It Works
 
-1. **Initial Setup**: The container clones your Git repository and installs dependencies
-2. **Start**: Your Node.js application is started using the specified command
-3. **Monitoring**: Every `CHECK_INTERVAL` seconds, the container checks for new commits
-4. **Auto-Update**: When a new commit is detected:
-   - The current app is stopped
-   - New code is pulled from Git
-   - Dependencies are reinstalled
-   - The app is restarted with the new code
+### Atomic Deployments
+
+Each commit gets its own isolated directory under `/app/releases/<commit-hash>/`. This ensures zero-downtime updates and automatic rollback on failure.
+
+1. **Initial Setup**:
+   - Clones your Git repository to `/app/releases/<commit-hash>/`
+   - Installs dependencies in isolation
+   - Creates symlink `/app/current` → active release
+   - Starts your application
+
+2. **Monitoring**:
+   - Every `CHECK_INTERVAL` seconds, checks for new commits
+   - Monitors app health and auto-restarts if it crashes
+
+3. **Zero-Downtime Updates** (when new commit detected):
+   - ✅ Clone new version to `/app/releases/<new-commit>/`
+   - ✅ Install dependencies in new release (isolated)
+   - ✅ Gracefully shutdown old app (SIGTERM → wait → SIGKILL)
+   - ✅ Wait for ports to be released
+   - ✅ Update symlink to new release
+   - ✅ Start new app
+   - ✅ Cleanup old releases (keeps last 3)
+   - ❌ If anything fails → old version keeps running!
+
+### Smart Dependency Management
+
+- Tries `npm ci` first (faster, more reliable)
+- Auto-falls back to `npm install` if `package-lock.json` is out of sync
+- Verifies `node_modules` exists before starting app
 
 ## Examples
 
@@ -167,6 +193,29 @@ docker logs --tail 100 my-node-app
 - Check that your repository has a valid `package.json`
 - Verify the `START_COMMAND` matches your app's start script
 - Check logs for errors: `docker logs my-node-app`
+- Ensure all required environment variables are set
+
+### Port already in use during updates
+
+**Fixed!** The new atomic deployment system:
+- Gracefully shuts down the old app (SIGTERM → 10s wait → SIGKILL)
+- Waits 2 seconds for ports to be released
+- Only then starts the new version
+
+### npm ci fails with "out of sync" error
+
+**Fixed!** The system now:
+- Tries `npm ci` first (faster)
+- Auto-falls back to `npm install` if package-lock.json is out of sync
+- Continues with deployment automatically
+
+### Update failed and app is down
+
+**Fixed!** With atomic deployments:
+- New version is fully prepared before old one stops
+- If installation fails → old version keeps running
+- Check logs to see what went wrong
+- Fix the issue and push again
 
 ### Port conflicts
 
@@ -178,6 +227,7 @@ docker logs --tail 100 my-node-app
 - Verify the `CHECK_INTERVAL` is set correctly
 - Check that your repository is accessible
 - Ensure you're pushing to the correct branch
+- Check logs: `docker logs -f my-node-app`
 
 ## Development
 
