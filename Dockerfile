@@ -1,7 +1,7 @@
 FROM node:22-alpine
 
-# Install git and bash
-RUN apk add --no-cache git bash
+# Install git, bash, and net-tools for port checking
+RUN apk add --no-cache git bash net-tools
 
 # Create app directory
 WORKDIR /app

@@ -44,8 +44,9 @@ kill_app() {
     if [ ! -z "$APP_PID" ] && kill -0 $APP_PID 2>/dev/null; then
         log "Stopping application gracefully (PID: $APP_PID)..."
 
-        # Try SIGTERM first (graceful shutdown)
-        kill -TERM $APP_PID 2>/dev/null || true
+        # Kill the entire process group to ensure child processes are killed
+        # The negative PID kills the whole process group
+        kill -TERM -$APP_PID 2>/dev/null || kill -TERM $APP_PID 2>/dev/null || true
 
         # Wait up to 10 seconds for graceful shutdown
         local count=0
@@ -54,19 +55,32 @@ kill_app() {
             count=$((count + 1))
         done
 
-        # If still running, force kill
+        # If still running, force kill the process group
         if kill -0 $APP_PID 2>/dev/null; then
             warn "Process didn't stop gracefully, forcing shutdown..."
-            kill -KILL $APP_PID 2>/dev/null || true
+            kill -KILL -$APP_PID 2>/dev/null || kill -KILL $APP_PID 2>/dev/null || true
             wait $APP_PID 2>/dev/null || true
         fi
 
         log "Application stopped"
         APP_PID=""
 
-        # Wait a bit for ports to be released
+        # Wait for ports to be released - check if port is actually free
         log "Waiting for ports to be released..."
-        sleep 2
+        local port_wait=0
+        while [ $port_wait -lt 15 ]; do
+            # Check if any process is still listening on common Node.js ports
+            if ! netstat -tuln 2>/dev/null | grep -E ":(3000|7777|8080|5000)" | grep LISTEN > /dev/null; then
+                log "Ports released successfully"
+                break
+            fi
+            sleep 1
+            port_wait=$((port_wait + 1))
+        done
+
+        if [ $port_wait -ge 15 ]; then
+            warn "Timeout waiting for ports to be released, attempting to start anyway..."
+        fi
     fi
 }
 
@@ -86,8 +100,9 @@ start_app() {
     done
 
     # Start the app in background with explicit directory
+    # Use setsid to create a new process group for clean shutdown
     cd "$release_dir"
-    eval "$START_COMMAND" &
+    setsid bash -c "exec $START_COMMAND" &
     APP_PID=$!
 
     log "Application started with PID: $APP_PID"
