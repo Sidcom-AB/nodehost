@@ -226,6 +226,7 @@ else
     git clone -b "$BRANCH" "$REPO_URL" "$temp_clone"
     cd "$temp_clone"
     LAST_COMMIT=$(git rev-parse HEAD)
+    cd /app
     rm -rf "$temp_clone"
 
     log "Initial commit: $LAST_COMMIT"
