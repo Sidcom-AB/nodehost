@@ -31,23 +31,51 @@ log "Check interval: ${CHECK_INTERVAL}s"
 log "Start command: $START_COMMAND"
 log "Install command: $INSTALL_COMMAND"
 
-REPO_DIR="/app/repo"
+RELEASES_DIR="/app/releases"
+CURRENT_LINK="/app/current"
 APP_PID=""
+CURRENT_RELEASE=""
 
-# Function to kill the app if it's running
+# Create releases directory
+mkdir -p "$RELEASES_DIR"
+
+# Function to kill the app gracefully
 kill_app() {
     if [ ! -z "$APP_PID" ] && kill -0 $APP_PID 2>/dev/null; then
-        log "Stopping application (PID: $APP_PID)..."
-        kill $APP_PID 2>/dev/null || true
-        wait $APP_PID 2>/dev/null || true
+        log "Stopping application gracefully (PID: $APP_PID)..."
+
+        # Try SIGTERM first (graceful shutdown)
+        kill -TERM $APP_PID 2>/dev/null || true
+
+        # Wait up to 10 seconds for graceful shutdown
+        local count=0
+        while kill -0 $APP_PID 2>/dev/null && [ $count -lt 10 ]; do
+            sleep 1
+            count=$((count + 1))
+        done
+
+        # If still running, force kill
+        if kill -0 $APP_PID 2>/dev/null; then
+            warn "Process didn't stop gracefully, forcing shutdown..."
+            kill -KILL $APP_PID 2>/dev/null || true
+            wait $APP_PID 2>/dev/null || true
+        fi
+
+        log "Application stopped"
         APP_PID=""
+
+        # Wait a bit for ports to be released
+        log "Waiting for ports to be released..."
+        sleep 2
     fi
 }
 
 # Function to start the app
 start_app() {
+    local release_dir=$1
+
     log "Starting application with: $START_COMMAND"
-    log "Working directory: $REPO_DIR"
+    log "Working directory: $release_dir"
 
     # List all custom environment variables (exclude default system vars)
     log "Environment variables being passed to app:"
@@ -57,8 +85,8 @@ start_app() {
         log "  $key=***"
     done
 
-    # Start the app in background with explicit directory and all environment variables
-    cd "$REPO_DIR"
+    # Start the app in background with explicit directory
+    cd "$release_dir"
     eval "$START_COMMAND" &
     APP_PID=$!
 
@@ -67,64 +95,147 @@ start_app() {
 
 # Function to install dependencies
 install_deps() {
-    cd "$REPO_DIR"
-    if [ -f "package.json" ]; then
-        # Use npm ci if package-lock.json exists, otherwise use the configured command
-        if [ -f "package-lock.json" ] && [ "$INSTALL_COMMAND" = "npm install" ]; then
-            log "Found package-lock.json, using: npm ci"
-            if npm ci; then
-                log "Dependencies installed successfully with npm ci"
-            else
-                error "Failed to install dependencies with npm ci!"
-                return 1
-            fi
+    local release_dir=$1
+    cd "$release_dir"
+
+    if [ ! -f "package.json" ]; then
+        warn "No package.json found, skipping dependency installation"
+        return 0
+    fi
+
+    # Try npm ci first if package-lock.json exists
+    if [ -f "package-lock.json" ] && [ "$INSTALL_COMMAND" = "npm install" ]; then
+        log "Found package-lock.json, trying: npm ci"
+        if npm ci 2>&1; then
+            log "Dependencies installed successfully with npm ci"
         else
-            log "Installing dependencies with: $INSTALL_COMMAND"
-            if eval "$INSTALL_COMMAND"; then
-                log "Dependencies installed successfully"
+            warn "npm ci failed (possibly out of sync), falling back to npm install"
+            if npm install; then
+                log "Dependencies installed successfully with npm install"
             else
                 error "Failed to install dependencies!"
                 return 1
             fi
         fi
-
-        # Verify node_modules exists
-        if [ ! -d "node_modules" ]; then
-            error "node_modules directory not created after installation!"
+    else
+        log "Installing dependencies with: $INSTALL_COMMAND"
+        if eval "$INSTALL_COMMAND"; then
+            log "Dependencies installed successfully"
+        else
+            error "Failed to install dependencies!"
             return 1
         fi
-        log "node_modules directory verified"
-    else
-        warn "No package.json found, skipping dependency installation"
     fi
+
+    # Verify node_modules exists
+    if [ ! -d "node_modules" ]; then
+        error "node_modules directory not created after installation!"
+        return 1
+    fi
+    log "node_modules directory verified"
+    return 0
+}
+
+# Function to cleanup old releases (keep last 3)
+cleanup_old_releases() {
+    log "Cleaning up old releases..."
+    local keep_count=3
+    local releases=($(ls -t "$RELEASES_DIR" 2>/dev/null))
+    local count=0
+
+    for release in "${releases[@]}"; do
+        count=$((count + 1))
+        if [ $count -gt $keep_count ]; then
+            local release_path="$RELEASES_DIR/$release"
+            # Don't delete if it's the current release
+            if [ "$release_path" != "$CURRENT_RELEASE" ]; then
+                log "Removing old release: $release"
+                rm -rf "$release_path"
+            fi
+        fi
+    done
+}
+
+# Function to deploy a new release
+deploy_release() {
+    local commit_hash=$1
+    local release_dir="$RELEASES_DIR/$commit_hash"
+
+    log "Deploying release: $commit_hash"
+
+    # Create release directory
+    mkdir -p "$release_dir"
+
+    # Clone or copy repo to release directory
+    if [ -d "$release_dir/.git" ]; then
+        log "Release directory exists, updating..."
+        cd "$release_dir"
+        git fetch origin
+        git reset --hard "$commit_hash"
+    else
+        log "Cloning repository to release directory..."
+        git clone "$REPO_URL" "$release_dir"
+        cd "$release_dir"
+        git checkout "$commit_hash"
+    fi
+
+    # Install dependencies in new release
+    if ! install_deps "$release_dir"; then
+        error "Failed to install dependencies for new release"
+        rm -rf "$release_dir"
+        return 1
+    fi
+
+    # Stop old application
+    kill_app
+
+    # Update symlink to new release
+    rm -f "$CURRENT_LINK"
+    ln -sf "$release_dir" "$CURRENT_LINK"
+    CURRENT_RELEASE="$release_dir"
+
+    log "Symlink updated to new release"
+
+    # Start new application
+    start_app "$release_dir"
+
+    # Cleanup old releases
+    cleanup_old_releases
+
     return 0
 }
 
 # Trap signals to ensure cleanup
 trap 'log "Received signal, shutting down..."; kill_app; exit 0' SIGTERM SIGINT
 
-# Clone or update repository
-if [ -d "$REPO_DIR/.git" ]; then
-    log "Repository already exists, fetching latest changes..."
-    cd "$REPO_DIR"
-    git fetch origin
-    git reset --hard "origin/$BRANCH"
+# Initial setup - check if we have an existing deployment
+if [ -L "$CURRENT_LINK" ] && [ -d "$(readlink -f "$CURRENT_LINK")" ]; then
+    log "Found existing deployment"
+    CURRENT_RELEASE=$(readlink -f "$CURRENT_LINK")
+    cd "$CURRENT_RELEASE"
+    LAST_COMMIT=$(git rev-parse HEAD)
+    log "Current commit: $LAST_COMMIT"
+
+    # Start existing app
+    start_app "$CURRENT_RELEASE"
 else
-    log "Cloning repository..."
-    git clone -b "$BRANCH" "$REPO_URL" "$REPO_DIR"
-fi
+    log "No existing deployment, performing initial deployment..."
 
-# Get initial commit hash
-cd "$REPO_DIR"
-LAST_COMMIT=$(git rev-parse HEAD)
-log "Current commit: $LAST_COMMIT"
+    # Clone to temporary location to get commit hash
+    temp_clone="/tmp/repo-temp-$$"
+    git clone -b "$BRANCH" "$REPO_URL" "$temp_clone"
+    cd "$temp_clone"
+    LAST_COMMIT=$(git rev-parse HEAD)
+    rm -rf "$temp_clone"
 
-# Install dependencies and start app
-if ! install_deps; then
-    error "Cannot start application - dependency installation failed"
-    exit 1
+    log "Initial commit: $LAST_COMMIT"
+
+    # Deploy initial release
+    if ! deploy_release "$LAST_COMMIT"; then
+        error "Initial deployment failed"
+        exit 1
+    fi
 fi
-start_app
 
 # Monitor loop
 log "Starting monitoring loop (checking every ${CHECK_INTERVAL}s)..."
@@ -134,12 +245,12 @@ while true; do
     # Check if app is still running
     if [ ! -z "$APP_PID" ] && ! kill -0 $APP_PID 2>/dev/null; then
         warn "Application process died unexpectedly, restarting..."
-        start_app
+        start_app "$CURRENT_RELEASE"
         continue
     fi
 
     # Fetch latest changes
-    cd "$REPO_DIR"
+    cd "$CURRENT_RELEASE"
     git fetch origin "$BRANCH" 2>/dev/null || {
         warn "Failed to fetch from remote, will retry next cycle"
         continue
@@ -152,24 +263,12 @@ while true; do
         log "New commit detected: $REMOTE_COMMIT"
         log "Updating application..."
 
-        # Stop current app
-        kill_app
-
-        # Pull changes
-        git reset --hard "origin/$BRANCH"
-
-        # Update commit hash
-        LAST_COMMIT=$REMOTE_COMMIT
-
-        # Reinstall dependencies
-        if ! install_deps; then
-            error "Failed to install dependencies after update, will retry next cycle"
-            continue
+        # Deploy new release
+        if deploy_release "$REMOTE_COMMIT"; then
+            LAST_COMMIT=$REMOTE_COMMIT
+            log "Application updated and restarted successfully"
+        else
+            error "Deployment failed, keeping current version running"
         fi
-
-        # Restart app
-        start_app
-
-        log "Application updated and restarted successfully"
     fi
 done
